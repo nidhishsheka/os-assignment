@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenMP Matrix Multiplication</title>
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:#08090d;
+  color:#f3f4f6;
+}
+header{
+  padding:28px 34px 20px;
+  border-bottom:1px solid #20232b;
+  background:#0d0f14;
+}
+h1{margin:0;font-size:28px}
+.subtitle{margin-top:7px;color:#8d94a3}
+.wrap{max-width:1450px;margin:auto;padding:24px}
+.stats{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:14px;
+  margin-bottom:18px;
+}
+.card,.matrix-card{
+  background:#10131a;
+  border:1px solid #242833;
+  border-radius:14px;
+  padding:18px;
+}
+.stat-label{color:#8d94a3;font-size:12px;text-transform:uppercase;letter-spacing:.08em}
+.stat-value{font-size:25px;font-weight:700;margin-top:6px}
+.status{font-weight:700}
+.layout{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:18px;
+}
+.matrix-card h2{font-size:17px;margin:0 0 12px}
+.matrix{
+  display:grid;
+  gap:2px;
+  max-height:430px;
+  overflow:auto;
+  background:#050608;
+  padding:6px;
+  border-radius:9px;
+}
+.cell{
+  min-width:45px;
+  height:29px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:#171a21;
+  color:#d8dbe2;
+  font-size:10px;
+  border-radius:3px;
+}
+.cell.done{background:#17341f}
+.cell.active{background:#4b3215;color:#fff}
+.progress-card{margin-top:18px}
+.thread{margin:14px 0}
+.thread-top{display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px}
+.bar{
+  height:12px;
+  background:#20242d;
+  border-radius:999px;
+  overflow:hidden;
+}
+.fill{
+  height:100%;
+  width:0%;
+  background:#6d5dfc;
+  transition:width .15s ease;
+}
+.overall{height:18px}
+.note{color:#8d94a3;font-size:13px;margin-top:12px}
+@media(max-width:900px){
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .layout{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap" style="padding:0">
+    <h1>OpenMP Matrix Multiplication</h1>
+    <div class="subtitle">Live visualization powered by the actual C++ engine</div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="stats">
+    <div class="card"><div class="stat-label">Matrix</div><div class="stat-value" id="size">—</div></div>
+    <div class="card"><div class="stat-label">Threads</div><div class="stat-value" id="threads">—</div></div>
+    <div class="card"><div class="stat-label">Execution</div><div class="stat-value" id="time">Running…</div></div>
+    <div class="card"><div class="stat-label">Verification</div><div class="stat-value status" id="verification">Waiting</div></div>
+  </section>
+
+  <section class="matrix-card progress-card">
+    <h2>Overall progress</h2>
+    <div class="bar overall"><div class="fill" id="overallFill"></div></div>
+    <div class="note" id="overallText">Waiting for matrix_data.json…</div>
+  </section>
+
+  <section class="matrix-card progress-card">
+    <h2>OpenMP thread distribution</h2>
+    <div id="threadsPanel"></div>
+  </section>
+
+  <section class="layout" style="margin-top:18px">
+    <div class="matrix-card">
+      <h2>Matrix A</h2>
+      <div class="matrix" id="matrixA"></div>
+    </div>
+    <div class="matrix-card">
+      <h2>Matrix B</h2>
+      <div class="matrix" id="matrixB"></div>
+    </div>
+    <div class="matrix-card" style="grid-column:1/-1">
+      <h2>Result Matrix C = A × B</h2>
+      <div class="matrix" id="matrixC"></div>
+    </div>
+  </section>
+
+  <div class="note">
+    Keep this page open, then run <b>./matrix_multi</b> in the project terminal.
+  </div>
+</main>
+
+<script>
+const URL = "../matrix_data.json";
+let last = "";
+
+function renderMatrix(id, values, n, progress, activeRows) {
+  const el = document.getElementById(id);
+  if (!values || !n) return;
+
+  let html = "";
+  for (let r=0;r<n;r++) {
+    const completed = progress && progress[r];
+    const active = activeRows && activeRows.includes(r);
+
+    for (let c=0;c<n;c++) {
+      const v = values[r*n+c] ?? 0;
+      const cls = active ? "cell active" : (completed ? "cell done" : "cell");
+      html += `<div class="${cls}">${Number(v).toFixed(1)}</div>`;
+    }
+  }
+  el.style.gridTemplateColumns = `repeat(${n}, minmax(35px,1fr))`;
+  el.innerHTML = html;
+}
+
+function update(d) {
+  document.getElementById("size").textContent = `${d.size} × ${d.size}`;
+  document.getElementById("threads").textContent = d.threads;
+
+  const total = d.size;
+  const completed = (d.completedRows || []).reduce((a,b)=>a+b,0);
+  const percent = Math.min(100, completed / total * 100);
+
+  document.getElementById("overallFill").style.width = percent + "%";
+  document.getElementById("overallText").textContent =
+    `${completed} / ${total} rows completed (${percent.toFixed(0)}%)`;
+
+  document.getElementById("time").textContent =
+    d.finished ? `${Number(d.executionTimeMs).toFixed(2)} ms` : "Running…";
+
+  document.getElementById("verification").textContent =
+    d.verification || "Waiting";
+
+  const active = d.activeRows || [];
+  const progress = Array(d.size).fill(false);
+
+  (d.threadProgress || []).forEach((t,i)=>{
+    for(let r=t.start;r<=t.end;r++){
+      const doneForThread = d.completedRows?.[i] || 0;
+      if(r-t.start < doneForThread) progress[r]=true;
+    }
+  });
+
+  renderMatrix("matrixA", d.matrixA, d.size, Array(d.size).fill(true), []);
+  renderMatrix("matrixB", d.matrixB, d.size, Array(d.size).fill(true), []);
+  renderMatrix("matrixC", d.matrixC, d.size, progress, active);
+
+  let panel = "";
+  (d.threadProgress || []).forEach((t,i)=>{
+    const pct = t.total ? t.completed/t.total*100 : 0;
+    const activeRow = active[i];
+    panel += `
+      <div class="thread">
+        <div class="thread-top">
+          <span>Thread ${i} — Rows ${t.start}–${t.end}</span>
+          <span>${t.completed}/${t.total}${activeRow >= 0 ? ` · working on row ${activeRow}` : ""}</span>
+        </div>
+        <div class="bar"><div class="fill" style="width:${pct}%"></div></div>
+      </div>`;
+  });
+  document.getElementById("threadsPanel").innerHTML = panel;
+}
+
+async function poll(){
+  try{
+    const response = await fetch(URL + "?t=" + Date.now(), {cache:"no-store"});
+    if(!response.ok) throw new Error("not found");
+    const text = await response.text();
+    if(text !== last){
+      last = text;
+      update(JSON.parse(text));
+    }
+  }catch(e){
+    document.getElementById("overallText").textContent =
+      "Waiting for C++ engine… run ./matrix_multi";
+  }
+}
+
+poll();
+setInterval(poll, 100);
+</script>
+</body>
+</html>
